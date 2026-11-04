@@ -3,6 +3,14 @@
 
 std::mutex NdiAudioProcessor::init_mutex{};
 
+// Sube el valor de pico guardado si el nuevo es mayor (solo escribe el hilo
+// de audio; la interfaz lo lee y lo reinicia).
+static inline void raisePeak(std::atomic<float> &peak, float value)
+{
+    if (value > peak.load(std::memory_order_relaxed))
+        peak.store(value, std::memory_order_relaxed);
+}
+
 //==============================================================================
 NdiAudioProcessor::NdiAudioProcessor()
     // : AudioProcessor()
@@ -384,6 +392,8 @@ void NdiAudioProcessor::processBlock2(juce::AudioBuffer<T> &buffer,
         return;
     }
 
+    last_block_ms.store(juce::Time::getMillisecondCounter());
+
     if (send_ok)
     {
         send_audio_frame.sample_rate = sampleRate;
@@ -391,6 +401,8 @@ void NdiAudioProcessor::processBlock2(juce::AudioBuffer<T> &buffer,
         send_audio_frame.no_samples = numSamples;
         send_audio_frame.channel_stride_in_bytes =
             numSamples * static_cast<int>(sizeof(T));
+
+        float send_level = 0.0f;
 
         for (auto i = 0; i < totalNumInputChannels; i++)
         {
@@ -401,9 +413,12 @@ void NdiAudioProcessor::processBlock2(juce::AudioBuffer<T> &buffer,
             auto read_p = buffer.getReadPointer(i);
             for (auto j = 0; j < numSamples; j++)
             {
-                *write_p++ = static_cast<float>(*read_p++);
+                const auto sample = static_cast<float>(*read_p++);
+                *write_p++ = sample;
+                send_level = juce::jmax(send_level, std::abs(sample));
             }
         }
+        raisePeak(send_peak, send_level);
         p_NDILib->send_send_audio_v2(ndi_send, &send_audio_frame);
     }
 
@@ -448,6 +463,8 @@ void NdiAudioProcessor::processBlock2(juce::AudioBuffer<T> &buffer,
                 ? jmin((int)recv_channels.size(), totalNumOutputChannels)
                 : jmin(totalNumOutputChannels, num_source_channels);
 
+        float recv_level = 0.0f;
+
         for (auto i = 0; i < num_channels; i++)
         {
             auto n = i;
@@ -465,13 +482,31 @@ void NdiAudioProcessor::processBlock2(juce::AudioBuffer<T> &buffer,
             auto write_p = buffer.getWritePointer(i);
             for (auto j = 0; j < numSamples; j++)
             {
-                *write_p++ = read_p ? *read_p++ : 0;
+                const float sample = read_p ? *read_p++ : 0.0f;
+                *write_p++ = static_cast<T>(sample);
+                recv_level = juce::jmax(recv_level, std::abs(sample));
             }
         }
+        raisePeak(recv_peak, recv_level);
 
         // Free the original frame.
         p_NDILib->framesync_free_audio(ndi_framesync, &recv_audio_frame);
     }
+
+    // Consulta de conexiones ~10 veces por segundo (timeout 0 = no bloquea)
+    connection_poll_samples += numSamples;
+    if (connection_poll_samples >= juce::jmax(1, sampleRate / 10))
+    {
+        connection_poll_samples = 0;
+
+        tx_connections.store((send_ok && ndi_send)
+                                 ? p_NDILib->send_get_no_connections(ndi_send, 0)
+                                 : -1);
+        rx_connections.store((recv_ok && ndi_recv)
+                                 ? p_NDILib->recv_get_no_connections(ndi_recv)
+                                 : -1);
+    }
+
     audio_lock.exit();
 }
 
@@ -538,6 +573,7 @@ void NdiAudioProcessor::parameterChanged(const String &parameterID,
     if (parameterID == "send")
     {
         send_ok = false;
+        tx_connections.store(-1);
 
         if (newValue >= 0.5f && ndi_send_name.isNotEmpty())
         {
@@ -559,11 +595,13 @@ void NdiAudioProcessor::parameterChanged(const String &parameterID,
             p_NDILib->send_add_connection_metadata(ndi_send, &ndi_metadata);
 
             send_ok = true;
+            tx_connections.store(0);
         }
     }
     if (parameterID == "recv" || parameterID == "ndi_recv")
     {
         recv_ok = false;
+        rx_connections.store(-1);
 
         if (newValue >= 0.5f || parameterID == "ndi_recv")
         {
@@ -591,6 +629,7 @@ void NdiAudioProcessor::parameterChanged(const String &parameterID,
             p_NDILib->recv_add_connection_metadata(ndi_recv, &ndi_metadata);
 
             recv_ok = true;
+            rx_connections.store(0);
         }
     }
 

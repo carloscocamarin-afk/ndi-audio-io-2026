@@ -234,6 +234,40 @@ public:
         return p_NDILib;
     }
 
+    //==========================================================================
+    // Estado y niveles para la interfaz (seguros para leer desde la UI).
+    // Los valores los actualiza el hilo de audio.
+
+    // Pico (0..1) desde la ultima lectura. Al leerlo se reinicia.
+    float takeSendPeak()
+    {
+        return send_peak.exchange(0.0f);
+    }
+
+    float takeRecvPeak()
+    {
+        return recv_peak.exchange(0.0f);
+    }
+
+    // Receptores conectados a nuestro emisor. -1 = envio apagado.
+    int getSendConnections() const
+    {
+        return tx_connections.load();
+    }
+
+    // Conexion con la fuente NDI elegida (0 o 1). -1 = recepcion apagada.
+    int getRecvConnections() const
+    {
+        return rx_connections.load();
+    }
+
+    // true si el audio esta fluyendo (el dispositivo/host llama a processBlock)
+    bool isAudioRunning() const
+    {
+        return (juce::Time::getMillisecondCounter() - last_block_ms.load()) <
+               1000u;
+    }
+
 private:
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NdiAudioProcessor)
@@ -273,6 +307,14 @@ private:
 
     bool send_ok{false};
     bool recv_ok{false};
+
+    // estado visible para la interfaz
+    std::atomic<float> send_peak{0.0f};
+    std::atomic<float> recv_peak{0.0f};
+    std::atomic<int> tx_connections{-1};
+    std::atomic<int> rx_connections{-1};
+    std::atomic<uint32_t> last_block_ms{0};
+    int connection_poll_samples{0};
 
     SpinLock parameter_lock{};
     SpinLock audio_lock{};

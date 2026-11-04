@@ -58,13 +58,13 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
     addAndMakeVisible (juce__sendButton.get());
     juce__sendButton->addListener (this);
     juce__sendButton->setColour (juce::TextButton::buttonColourId, juce::Colour (0xff0e0e0e));
-    juce__sendButton->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff6257ff));
+    juce__sendButton->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffc93c3c));
 
     juce__recvButton.reset (new juce::TextButton ("recv"));
     addAndMakeVisible (juce__recvButton.get());
     juce__recvButton->addListener (this);
     juce__recvButton->setColour (juce::TextButton::buttonColourId, juce::Colour (0xff0e0e0e));
-    juce__recvButton->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff6257ff));
+    juce__recvButton->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff2a9d62));
 
     drawable1 = juce::Drawable::createFromImageData (ndiLogoMasterLight_svg, ndiLogoMasterLight_svgSize);
 
@@ -80,6 +80,34 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
     juce__recvButton->setToggleable(true);
     juce__recvButton->setClickingTogglesState(true);
 
+    // botones: texto blanco y textos claros segun el estado
+    for (auto* b : {juce__sendButton.get(), juce__recvButton.get()})
+    {
+        b->setColour(juce::TextButton::textColourOffId,
+                     juce::Colours::white.withAlpha(0.85f));
+        b->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    }
+    juce__sendButton->setButtonText("ENVIAR");
+    juce__recvButton->setButtonText("RECIBIR");
+
+    // etiquetas sobre los campos
+    send_label.setText("Nombre del emisor NDI (Enter para aplicar)",
+                       juce::dontSendNotification);
+    recv_label.setText("Fuente NDI a recibir", juce::dontSendNotification);
+    for (auto* l : {&send_label, &recv_label})
+    {
+        l->setColour(juce::Label::textColourId,
+                     juce::Colours::white.withAlpha(0.6f));
+        l->setJustificationType(juce::Justification::bottomLeft);
+        l->setInterceptsMouseClicks(false, false);
+        addAndMakeVisible(l);
+    }
+
+    addAndMakeVisible(send_meter);
+    addAndMakeVisible(recv_meter);
+    addAndMakeVisible(send_status);
+    addAndMakeVisible(recv_status);
+
     rxAttachment.reset(
         new ButtonAttachment(ap.getAPVTS(), "recv", *juce__recvButton));
     txAttachment.reset(
@@ -93,11 +121,12 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
 
 
     //[Constructor] You can add your own custom stuff here..
-    timerCallback();
-    startTimer(1000);
+    refreshSources();
+    updateIndicators();
+    startTimer(33); // ~30 fps para los medidores
 
     setResizable(true, false);
-    setResizeLimits(240, 240, INT16_MAX, INT16_MAX);
+    setResizeLimits(420, 360, INT16_MAX, INT16_MAX);
 
     // if (juce::JUCEApplicationBase::isStandaloneApp())
     // {
@@ -190,6 +219,22 @@ void NdiAudioProcessorEditor::resized()
     juce__sendButton->setBounds (proportionOfWidth (0.6750f), proportionOfHeight (0.4354f), proportionOfWidth (0.2141f), proportionOfHeight (0.0917f));
     juce__recvButton->setBounds (proportionOfWidth (0.6750f), proportionOfHeight (0.7063f), proportionOfWidth (0.2141f), proportionOfHeight (0.0917f));
     //[UserResized] Add your own custom resize handling here..
+    {
+        const auto x = proportionOfWidth (0.1375f);
+        const auto w = proportionOfWidth (0.4500f);
+        const auto fs = juce::jlimit (10.0f, 14.0f, (float) getHeight() * 0.026f);
+
+        send_label.setFont (juce::Font (fs));
+        recv_label.setFont (juce::Font (fs));
+
+        send_label.setBounds (x, proportionOfHeight (0.375f), w, proportionOfHeight (0.055f));
+        send_meter.setBounds (x, proportionOfHeight (0.545f), w, proportionOfHeight (0.030f));
+        send_status.setBounds (x, proportionOfHeight (0.585f), w, proportionOfHeight (0.050f));
+
+        recv_label.setBounds (x, proportionOfHeight (0.645f), w, proportionOfHeight (0.055f));
+        recv_meter.setBounds (x, proportionOfHeight (0.815f), w, proportionOfHeight (0.030f));
+        recv_status.setBounds (x, proportionOfHeight (0.855f), w, proportionOfHeight (0.050f));
+    }
     //[/UserResized]
 }
 
@@ -272,6 +317,90 @@ void NdiAudioProcessorEditor::textEditorReturnKeyPressed(TextEditor& editor)
 }
 
 void NdiAudioProcessorEditor::timerCallback()
+{
+    updateIndicators();
+
+    // la lista de fuentes se refresca cada ~1 s
+    if (++source_refresh_ticks >= 30)
+    {
+        source_refresh_ticks = 0;
+        refreshSources();
+    }
+}
+
+void NdiAudioProcessorEditor::updateIndicators()
+{
+    using State = StatusIndicator::State;
+
+    const auto send_peak = ap.takeSendPeak();
+    const auto recv_peak = ap.takeRecvPeak();
+
+    // el texto de los botones sigue su estado (activo = detener)
+    juce__sendButton->setButtonText(juce__sendButton->getToggleState() ? "DETENER" : "ENVIAR");
+    juce__recvButton->setButtonText(juce__recvButton->getToggleState() ? "DETENER" : "RECIBIR");
+
+    if (!ap.getNDILib())
+    {
+        send_meter.setActive(false);
+        recv_meter.setActive(false);
+        send_status.setStatus(State::error, "NDI Runtime no encontrado");
+        recv_status.setStatus(State::error, "NDI Runtime no encontrado");
+        return;
+    }
+
+    const bool audio_running = ap.isAudioRunning();
+    const int tx = ap.getSendConnections();
+    const int rx = ap.getRecvConnections();
+
+    // ---------------- envio ----------------
+    send_meter.setActive(tx >= 0 && audio_running);
+    if (tx >= 0 && audio_running)
+        send_meter.pushLevel(send_peak);
+
+    if (tx < 0)
+        send_status.setStatus(State::off, "Emisor detenido");
+    else if (!audio_running)
+        send_status.setStatus(State::waiting, "Sin flujo de audio");
+    else if (tx == 0)
+        send_status.setStatus(State::waiting, "Emitiendo - sin receptores conectados");
+    else
+        send_status.setStatus(State::ok, "Emitiendo - " + String(tx) +
+                                             (tx == 1 ? " receptor conectado"
+                                                      : " receptores conectados"));
+
+    // ---------------- recepcion ----------------
+    recv_meter.setActive(rx > 0 && audio_running);
+    if (rx > 0 && audio_running)
+        recv_meter.pushLevel(recv_peak);
+
+    // cuenta ~5 s de silencio continuo mientras hay conexion
+    if (rx > 0 && audio_running && recv_peak < 0.00003f)
+        ++recv_silent_ticks;
+    else
+        recv_silent_ticks = 0;
+
+    if (rx < 0)
+    {
+        recv_status.setStatus(State::off, "Receptor detenido");
+    }
+    else
+    {
+        const auto name = ap.getNDIRecvName();
+
+        if (name.isEmpty())
+            recv_status.setStatus(State::waiting, "Elige una fuente");
+        else if (!audio_running)
+            recv_status.setStatus(State::waiting, "Sin flujo de audio");
+        else if (rx == 0)
+            recv_status.setStatus(State::waiting, "Buscando: " + name);
+        else if (recv_silent_ticks > 150)
+            recv_status.setStatus(State::ok, "Conectado (sin audio entrante): " + name);
+        else
+            recv_status.setStatus(State::ok, "Conectado: " + name);
+    }
+}
+
+void NdiAudioProcessorEditor::refreshSources()
 {
     if (!ap.getNDILib())
         return;

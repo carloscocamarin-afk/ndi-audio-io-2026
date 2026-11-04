@@ -21,6 +21,7 @@
 
 //[Headers]     -- You can add your own extra header files here --
 #include "CustomLookAndFeel.h"
+#include "StatusWidgets.h"
 #include "PluginProcessor.h"
 #include <JuceHeader.h>
 
@@ -81,6 +82,16 @@ class NdiAudioProcessorEditor : public juce::AudioProcessorEditor,
     std::mutex editor_mutex;
     bool timer_update {false};
     String prev_text {};
+
+    // indicadores de conexion, medidores y etiquetas
+    LevelMeter send_meter, recv_meter;
+    StatusIndicator send_status, recv_status;
+    juce::Label send_label, recv_label;
+    int source_refresh_ticks {0};
+    int recv_silent_ticks {0};
+
+    void refreshSources();
+    void updateIndicators();
 
     //[/UserVariables]
 
