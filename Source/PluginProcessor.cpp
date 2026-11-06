@@ -211,6 +211,9 @@ macos_post:
 
 NdiAudioProcessor::~NdiAudioProcessor()
 {
+    // el segundo emisor debe cerrarse antes de descargar la libreria NDI
+    sender2.stop();
+
     if (!p_NDILib)
         return;
 
@@ -534,6 +537,11 @@ void NdiAudioProcessor::getStateInformation(juce::MemoryBlock &destData)
     auto node = state.getOrCreateChildWithName("text_input", nullptr);
     node.setProperty("recv_text_input", recv_text_input, nullptr);
     node.setProperty("send_text_input", send_text_input, nullptr);
+
+    // segundo emisor (nombre, dispositivo y si estaba activo)
+    auto node2 = state.getOrCreateChildWithName("sender2", nullptr);
+    node2.copyPropertiesFrom(sender2.getState(), nullptr);
+
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -557,6 +565,14 @@ void NdiAudioProcessor::setStateInformation(const void *data, int sizeInBytes)
 
     parameterChanged("recv", apvts.getRawParameterValue("recv")->load());
     parameterChanged("send", apvts.getRawParameterValue("send")->load());
+
+    // segundo emisor: si estaba activo, se reanuda
+    auto node2 = apvts.state.getChildWithName("sender2");
+    if (node2.isValid())
+    {
+        sender2.setNDILib(p_NDILib);
+        sender2.restore(node2);
+    }
 
     return;
 }

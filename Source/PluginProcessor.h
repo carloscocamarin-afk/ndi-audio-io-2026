@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #endif
 #include <Processing.NDI.Lib.h>
+#include "SecondarySender.h"
 //==============================================================================
 /**
  */
@@ -235,6 +236,15 @@ public:
     }
 
     //==========================================================================
+    // Segundo emisor NDI con su propio dispositivo de audio (solo app
+    // independiente).
+    SecondarySender &getSender2()
+    {
+        sender2.setNDILib(p_NDILib);
+        return sender2;
+    }
+
+    //==========================================================================
     // Estado y niveles para la interfaz (seguros para leer desde la UI).
     // Los valores los actualiza el hilo de audio.
 
@@ -307,6 +317,8 @@ private:
 
     bool send_ok{false};
     bool recv_ok{false};
+
+    SecondarySender sender2;
 
     // estado visible para la interfaz
     std::atomic<float> send_peak{0.0f};

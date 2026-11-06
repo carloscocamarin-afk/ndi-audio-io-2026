@@ -753,7 +753,9 @@ class StandalonePluginHolder : private AudioIODeviceCallback,
 
     @tags{Audio}
 */
-class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
+class StandaloneFilterWindow : public DocumentWindow,
+                               private Button::Listener,
+                               private Timer
 {
   public:
     //==============================================================================
@@ -853,10 +855,15 @@ class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
             if (auto* editor = processor->getActiveEditor())
                 setResizable(editor->isResizable(), false);
 #endif
+
+        // guarda el estado cada pocos segundos (ver timerCallback)
+        startTimer(5000);
     }
 
     ~StandaloneFilterWindow() override
     {
+        stopTimer();
+
 #if (!JUCE_IOS) && (!JUCE_ANDROID)
         if (auto* props = pluginHolder->settings.get())
         {
@@ -919,6 +926,11 @@ class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
         case 4:
             resetToDefaultState();
             break;
+        case 5:
+#if JUCE_WINDOWS
+            setStartWithWindows(!isStartWithWindowsEnabled());
+#endif
+            break;
         default:
             break;
         }
@@ -944,6 +956,45 @@ class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
     std::unique_ptr<StandalonePluginHolder> pluginHolder;
 
   private:
+    // Guarda el estado (enviando/recibiendo, nombres, fuente) cada 5 s. Antes
+    // solo se guardaba al cerrar con el boton, asi que un apagado de Windows o
+    // un cierre forzado perdia lo que estaba activo.
+    void timerCallback() override
+    {
+        if (pluginHolder != nullptr)
+            pluginHolder->savePluginState();
+    }
+
+#if JUCE_WINDOWS
+    // Inicio automatico con Windows (clave Run del usuario actual; no requiere
+    // permisos de administrador).
+    static String getStartupRegistryPath()
+    {
+        return "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\NDI Audio IO";
+    }
+
+    static bool isStartWithWindowsEnabled()
+    {
+        return WindowsRegistry::valueExists(getStartupRegistryPath());
+    }
+
+    static void setStartWithWindows(bool shouldStart)
+    {
+        if (shouldStart)
+        {
+            const auto exe =
+                File::getSpecialLocation(File::currentExecutableFile)
+                    .getFullPathName();
+            WindowsRegistry::setValue(getStartupRegistryPath(),
+                                      "\"" + exe + "\"");
+        }
+        else
+        {
+            WindowsRegistry::deleteValue(getStartupRegistryPath());
+        }
+    }
+#endif
+
     void updateContent()
     {
         auto* content = new MainContentComponent(*this);
@@ -967,6 +1018,10 @@ class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
         m.addItem(3, TRANS("Load a saved state..."));
         m.addSeparator();
         m.addItem(4, TRANS("Reset to default state"));
+#if JUCE_WINDOWS
+        m.addSeparator();
+        m.addItem(5, "Iniciar con Windows", true, isStartWithWindowsEnabled());
+#endif
 
         m.showMenuAsync(
             PopupMenu::Options(),

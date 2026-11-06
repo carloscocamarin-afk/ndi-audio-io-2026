@@ -89,8 +89,20 @@ class NdiAudioProcessorEditor : public juce::AudioProcessorEditor,
     juce::Label send_label, recv_label;
     int source_refresh_ticks {0};
     int recv_silent_ticks {0};
+    int recv_search_ticks {0};
+    int recv_retries {0};
+
+    // emisor 2 (segundo dispositivo)
+    juce::Label send2_label, device2_label;
+    juce::TextEditor send2_name;
+    juce::ComboBox send2_device;
+    juce::TextButton send2_button {"ENVIAR"};
+    LevelMeter send2_meter;
+    StatusIndicator send2_status;
+    int device_scan_ticks {0};
 
     void refreshSources();
+    void refreshDevices(bool force);
     void updateIndicators();
 
     //[/UserVariables]
