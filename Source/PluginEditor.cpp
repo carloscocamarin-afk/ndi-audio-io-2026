@@ -24,6 +24,43 @@
 
 
 //[MiscUserDefs] You can add your own user definitions and misc code here...
+
+// Ventana con el panel de ajustes de audio (tipo de driver, tarjeta, canales,
+// frecuencia y buffer) del emisor 2, usando SU gestor de audio.
+class Sender2SettingsWindow : public juce::DocumentWindow
+{
+  public:
+    Sender2SettingsWindow(juce::AudioDeviceManager& manager,
+                          juce::Colour background,
+                          std::function<void()> onCloseRequested)
+        : juce::DocumentWindow("Ajustes de audio - Emisor 2", background,
+                               juce::DocumentWindow::closeButton),
+          closeCallback(std::move(onCloseRequested))
+    {
+        auto* selector = new juce::AudioDeviceSelectorComponent(
+            manager, 0, 8, 0, 0, false, false, false, false);
+        selector->setSize(500, 340);
+
+        setUsingNativeTitleBar(true);
+        setContentOwned(selector, true);
+        setResizable(false, false);
+        setAlwaysOnTop(true);
+        centreWithSize(getWidth(), getHeight());
+        setVisible(true);
+    }
+
+    void closeButtonPressed() override
+    {
+        if (closeCallback)
+            closeCallback();
+    }
+
+  private:
+    std::function<void()> closeCallback;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Sender2SettingsWindow)
+};
+
 //[/MiscUserDefs]
 
 //==============================================================================
@@ -141,6 +178,12 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
     send2_button.addListener(this);
     addAndMakeVisible(send2_button);
 
+    send2_settings.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff0e0e0e));
+    send2_settings.setColour(juce::TextButton::textColourOffId,
+                             juce::Colours::white.withAlpha(0.85f));
+    send2_settings.addListener(this);
+    addAndMakeVisible(send2_settings);
+
     addAndMakeVisible(send2_meter);
     addAndMakeVisible(send2_status);
 
@@ -148,7 +191,7 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
     if (!juce::JUCEApplicationBase::isStandaloneApp())
         for (auto* c : std::initializer_list<juce::Component*>{
                  &send2_label, &send2_name, &send2_device, &send2_button,
-                 &send2_meter, &send2_status})
+                 &send2_settings, &send2_meter, &send2_status})
             c->setVisible(false);
 
     refreshDevices(true);
@@ -190,6 +233,7 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
 NdiAudioProcessorEditor::~NdiAudioProcessorEditor()
 {
     //[Destructor_pre]. You can add your own custom destruction code here..
+    settings2_window = nullptr; // su selector usa el gestor del procesador
     rxAttachment = nullptr;
     txAttachment = nullptr;
     comboboxAttachment = nullptr;
@@ -291,6 +335,7 @@ void NdiAudioProcessorEditor::resized()
         send2_name.setBounds (x, Y (294), w, Y (38));
         send2_button.setBounds (bx, Y (294), bw, Y (38));
         send2_device.setBounds (x, Y (336), w, Y (34));
+        send2_settings.setBounds (bx, Y (336), bw, Y (34));
         send2_meter.setBounds (x, Y (374), w, Y (12));
         send2_status.setBounds (x, Y (389), w, Y (22));
 
@@ -364,6 +409,10 @@ void NdiAudioProcessorEditor::buttonClicked (juce::Button* buttonThatWasClicked)
         //[/UserButtonCode_juce__recvButton]
     }
 
+    else if (buttonThatWasClicked == &send2_settings)
+    {
+        openSender2Settings();
+    }
     else if (buttonThatWasClicked == &send2_button)
     {
         auto& s2 = ap.getSender2();
@@ -436,16 +485,65 @@ void NdiAudioProcessorEditor::timerCallback()
     }
 }
 
+void NdiAudioProcessorEditor::openSender2Settings()
+{
+    if (settings2_window != nullptr)
+    {
+        settings2_window->toFront(true);
+        return;
+    }
+
+    auto& s2 = ap.getSender2();
+
+    // si aun no hay tarjeta elegida, se parte de la primera de la lista
+    if (s2.getDeviceName().isEmpty() && send2_device.getNumItems() > 0)
+        s2.setDeviceName(send2_device.getItemText(0));
+
+    if (s2.getDeviceName().isEmpty())
+        return; // no hay dispositivos de entrada
+
+    s2.beginSettings();
+
+    settings2_window = std::make_unique<Sender2SettingsWindow>(
+        s2.getDeviceManager(),
+        getLookAndFeel().findColour(juce::ResizableWindow::backgroundColourId),
+        [this]() { closeSender2Settings(); });
+}
+
+void NdiAudioProcessorEditor::closeSender2Settings()
+{
+    // se cierra en diferido: la ventana no puede borrarse a si misma
+    juce::MessageManager::callAsync(
+        [safe = juce::Component::SafePointer<NdiAudioProcessorEditor>(this)]()
+        {
+            if (auto* editor = safe.getComponent())
+            {
+                editor->ap.getSender2().endSettings();
+                editor->settings2_window = nullptr;
+                editor->refreshDevices(false);
+            }
+        });
+}
+
 void NdiAudioProcessorEditor::refreshDevices(bool force)
 {
     if (!juce::JUCEApplicationBase::isStandaloneApp())
         return;
 
     auto& s2 = ap.getSender2();
-    if (s2.isWanted() && !force)
-        return;
 
-    auto names = s2.scanInputDevices();
+    // con el emisor 2 activo no se reescanean las tarjetas (hay una en uso):
+    // solo se actualiza la seleccion
+    juce::StringArray names;
+    if (s2.isWanted() && !force)
+    {
+        for (int i = 0; i < send2_device.getNumItems(); ++i)
+            names.add(send2_device.getItemText(i));
+    }
+    else
+    {
+        names = s2.scanInputDevices();
+    }
 
     // si el dispositivo guardado no esta conectado, se deja en la lista igual
     const auto saved = s2.getDeviceName();

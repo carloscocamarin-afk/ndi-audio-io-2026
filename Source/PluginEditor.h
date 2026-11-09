@@ -35,6 +35,8 @@
     Describe your class and how it works here!
                                                                     //[/Comments]
 */
+class Sender2SettingsWindow; // ventana de ajustes de audio del emisor 2
+
 class NdiAudioProcessorEditor : public juce::AudioProcessorEditor,
                                 private juce::Timer,
                                 public juce::TextEditor::Listener,
@@ -99,7 +101,12 @@ class NdiAudioProcessorEditor : public juce::AudioProcessorEditor,
     juce::TextButton send2_button {"ENVIAR"};
     LevelMeter send2_meter;
     StatusIndicator send2_status;
+    juce::TextButton send2_settings {"AJUSTES"};
+    std::unique_ptr<Sender2SettingsWindow> settings2_window;
     int device_scan_ticks {0};
+
+    void openSender2Settings();
+    void closeSender2Settings();
 
     void refreshSources();
     void refreshDevices(bool force);

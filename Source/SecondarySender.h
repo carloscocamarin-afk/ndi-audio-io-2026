@@ -48,6 +48,12 @@ class SecondarySender : private juce::AudioIODeviceCallback,
 
     void setDeviceName(const juce::String& newDevice)
     {
+        if (newDevice != deviceName)
+        {
+            // otra tarjeta: canales y buffer vuelven a automatico
+            inputMask = 0;
+            bufferSetting = 0;
+        }
         deviceName = newDevice;
     }
 
@@ -62,12 +68,45 @@ class SecondarySender : private juce::AudioIODeviceCallback,
     juce::StringArray scanInputDevices()
     {
         deviceManager.getAvailableDeviceTypes(); // crea los tipos de driver
+        applySavedType();
         if (auto* type = deviceManager.getCurrentDeviceTypeObject())
         {
             type->scanForDevices();
             return type->getDeviceNames(true);
         }
         return {};
+    }
+
+    //==========================================================================
+    // Ajustes de audio (dialogo con tipo de driver, tarjeta, canales,
+    // frecuencia y buffer). Usan el AudioDeviceManager propio de este emisor.
+    juce::AudioDeviceManager& getDeviceManager()
+    {
+        return deviceManager;
+    }
+
+    // Llamar antes de mostrar el dialogo: si el emisor esta apagado, abre la
+    // tarjeta para que el dialogo parta de un estado valido.
+    void beginSettings()
+    {
+        settingsOpen = true;
+        if (!wanted)
+            openDevice();
+    }
+
+    // Llamar al cerrar el dialogo: guarda lo que se eligio y, si el emisor
+    // esta apagado, vuelve a soltar la tarjeta.
+    void endSettings()
+    {
+        captureSetup();
+        settingsOpen = false;
+        stale_seconds = 0;
+
+        if (!wanted)
+        {
+            closeDevice();
+            lastError.clear();
+        }
     }
 
     //==========================================================================
@@ -195,6 +234,10 @@ class SecondarySender : private juce::AudioIODeviceCallback,
         v.setProperty("name", name, nullptr);
         v.setProperty("device", deviceName, nullptr);
         v.setProperty("active", wanted, nullptr);
+        v.setProperty("type", typeName, nullptr);
+        v.setProperty("rate", rateSetting, nullptr);
+        v.setProperty("buffer", bufferSetting, nullptr);
+        v.setProperty("channels", inputMask, nullptr);
         return v;
     }
 
@@ -207,6 +250,10 @@ class SecondarySender : private juce::AudioIODeviceCallback,
         const auto savedName = v["name"].toString();
         name = savedName.isNotEmpty() ? savedName : juce::String("Emisor2");
         deviceName = v["device"].toString();
+        typeName = v["type"].toString();
+        rateSetting = v.hasProperty("rate") ? (double)v["rate"] : 48000.0;
+        bufferSetting = (int)v["buffer"];
+        inputMask = (int)v["channels"];
 
         if ((bool)v["active"])
             start();
@@ -216,12 +263,43 @@ class SecondarySender : private juce::AudioIODeviceCallback,
 
   private:
     //==========================================================================
+    // Cambia al tipo de driver guardado (p. ej. "Windows Audio"), solo si no
+    // hay un dispositivo abierto.
+    void applySavedType()
+    {
+        if (typeName.isEmpty() || deviceManager.getCurrentAudioDevice() != nullptr)
+            return;
+
+        if (deviceManager.getCurrentAudioDeviceType() != typeName)
+            deviceManager.setCurrentAudioDeviceType(typeName, false);
+    }
+
+    // Lee del gestor lo que el usuario eligio en el dialogo de ajustes.
+    void captureSetup()
+    {
+        const auto setup = deviceManager.getAudioDeviceSetup();
+        if (setup.inputDeviceName.isNotEmpty())
+            deviceName = setup.inputDeviceName;
+
+        const auto type = deviceManager.getCurrentAudioDeviceType();
+        if (type.isNotEmpty())
+            typeName = type;
+
+        if (auto* device = deviceManager.getCurrentAudioDevice())
+        {
+            rateSetting = device->getCurrentSampleRate();
+            bufferSetting = device->getCurrentBufferSizeSamples();
+            inputMask = device->getActiveInputChannels().toInteger();
+        }
+    }
+
     void openDevice()
     {
         closeDevice();
         lastError.clear();
 
         deviceManager.getAvailableDeviceTypes();
+        applySavedType();
         auto* type = deviceManager.getCurrentDeviceTypeObject();
         if (type == nullptr)
         {
@@ -231,7 +309,7 @@ class SecondarySender : private juce::AudioIODeviceCallback,
 
         type->scanForDevices();
 
-        // cuantos canales de entrada tiene (maximo 2)
+        // cuantos canales de entrada tiene la tarjeta
         int numChannels = 0;
         {
             std::unique_ptr<juce::AudioIODevice> probe(
@@ -246,16 +324,23 @@ class SecondarySender : private juce::AudioIODeviceCallback,
             return;
         }
 
+        // canales elegidos (0 = automatico: los dos primeros)
+        juce::BigInteger channels((juce::int32)inputMask);
+        juce::BigInteger valid;
+        valid.setRange(0, numChannels, true);
+        channels &= valid;
+        if (channels.isZero())
+            channels.setRange(0, juce::jmin(2, numChannels), true);
+
         juce::AudioDeviceManager::AudioDeviceSetup setup;
         setup.inputDeviceName = deviceName;
         setup.outputDeviceName = {};
         setup.useDefaultInputChannels = false;
-        setup.inputChannels.clear();
-        setup.inputChannels.setRange(0, juce::jmin(2, numChannels), true);
+        setup.inputChannels = channels;
         setup.useDefaultOutputChannels = false;
         setup.outputChannels.clear();
-        setup.sampleRate = 48000.0;
-        setup.bufferSize = 0;
+        setup.sampleRate = rateSetting > 0.0 ? rateSetting : 48000.0;
+        setup.bufferSize = bufferSetting;
 
         const auto error = deviceManager.setAudioDeviceSetup(setup, false);
         if (error.isNotEmpty())
@@ -278,7 +363,7 @@ class SecondarySender : private juce::AudioIODeviceCallback,
     // Cada segundo: si el audio no fluye, reintenta abrir el dispositivo.
     void timerCallback() override
     {
-        if (!wanted)
+        if (!wanted || settingsOpen)
             return;
 
         if (isAudioRunning())
@@ -379,6 +464,11 @@ class SecondarySender : private juce::AudioIODeviceCallback,
 
     juce::String name {"Emisor2"};
     juce::String deviceName;
+    juce::String typeName;       // tipo de driver (p. ej. "Windows Audio")
+    double rateSetting = 48000.0; // frecuencia de muestreo
+    int bufferSetting = 0;        // 0 = automatico
+    int inputMask = 0;            // canales de entrada activos (0 = automatico)
+    bool settingsOpen = false;
     juce::String lastError;
     bool wanted = false;
     int retries = 0;
