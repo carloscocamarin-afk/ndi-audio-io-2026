@@ -26,19 +26,22 @@
 //[MiscUserDefs] You can add your own user definitions and misc code here...
 
 // Ventana con el panel de ajustes de audio (tipo de driver, tarjeta, canales,
-// frecuencia y buffer) del emisor 2, usando SU gestor de audio.
-class Sender2SettingsWindow : public juce::DocumentWindow
+// frecuencia y buffer) de un emisor/receptor secundario, usando SU gestor.
+class AudioSettingsWindow : public juce::DocumentWindow
 {
   public:
-    Sender2SettingsWindow(juce::AudioDeviceManager& manager,
-                          juce::Colour background,
-                          std::function<void()> onCloseRequested)
-        : juce::DocumentWindow("Ajustes de audio - Emisor 2", background,
+    AudioSettingsWindow(const juce::String& title,
+                        juce::AudioDeviceManager& manager,
+                        bool showOutputs,
+                        juce::Colour background,
+                        std::function<void()> onCloseRequested)
+        : juce::DocumentWindow(title, background,
                                juce::DocumentWindow::closeButton),
           closeCallback(std::move(onCloseRequested))
     {
-        auto* selector = new juce::AudioDeviceSelectorComponent(
-            manager, 0, 8, 0, 0, false, false, false, false);
+        auto* selector = showOutputs
+            ? new juce::AudioDeviceSelectorComponent(manager, 0, 0, 0, 8, false, false, false, false)
+            : new juce::AudioDeviceSelectorComponent(manager, 0, 8, 0, 0, false, false, false, false);
         selector->setSize(500, 340);
 
         setUsingNativeTitleBar(true);
@@ -58,7 +61,7 @@ class Sender2SettingsWindow : public juce::DocumentWindow
   private:
     std::function<void()> closeCallback;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Sender2SettingsWindow)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioSettingsWindow)
 };
 
 //[/MiscUserDefs]
@@ -130,7 +133,7 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
     // etiquetas sobre los campos
     send_label.setText("Emisor 1 - nombre NDI (Enter para aplicar)",
                        juce::dontSendNotification);
-    recv_label.setText("Fuente NDI a recibir", juce::dontSendNotification);
+    recv_label.setText("Receptor 1 - fuente NDI (se escribe o se elige)", juce::dontSendNotification);
     for (auto* l : {&send_label, &recv_label})
     {
         l->setColour(juce::Label::textColourId,
@@ -194,7 +197,71 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
                  &send2_settings, &send2_meter, &send2_status})
             c->setVisible(false);
 
+    // ---------------- fila de dispositivo: emisor 1 y receptor 1 ----------------
+    for (auto* l : {&dev1_box, &rdev1_box})
+    {
+        l->setColour(juce::Label::backgroundColourId, juce::Colour(0xff1a1a26));
+        l->setColour(juce::Label::outlineColourId, juce::Colour(0xff55556a));
+        l->setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.7f));
+        l->setJustificationType(juce::Justification::centredLeft);
+        l->setBorderSize(juce::BorderSize<int>(0, 6, 0, 6));
+        l->setInterceptsMouseClicks(false, false);
+        addAndMakeVisible(l);
+    }
+
+    // ---------------- receptor 2 ----------------
+    recv2_label.setText("Receptor 2 - fuente NDI (se escribe o se elige)",
+                        juce::dontSendNotification);
+    recv2_label.setColour(juce::Label::textColourId,
+                          juce::Colours::white.withAlpha(0.6f));
+    recv2_label.setJustificationType(juce::Justification::bottomLeft);
+    recv2_label.setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(recv2_label);
+
+    recv2_source.setEditableText(true);
+    recv2_source.setJustificationType(juce::Justification::centredLeft);
+    recv2_source.setTextWhenNothingSelected("Elige la fuente NDI del receptor 2");
+    recv2_source.setTextWhenNoChoicesAvailable("No hay fuentes NDI");
+    recv2_source.addListener(this);
+    addAndMakeVisible(recv2_source);
+
+    recv2_device.setJustificationType(juce::Justification::centredLeft);
+    recv2_device.setTextWhenNothingSelected("Elige la tarjeta de salida del receptor 2");
+    recv2_device.setTextWhenNoChoicesAvailable("No hay dispositivos de salida");
+    recv2_device.addListener(this);
+    addAndMakeVisible(recv2_device);
+
+    recv2_button.setClickingTogglesState(true);
+    recv2_button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff0e0e0e));
+    recv2_button.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2a9d62));
+    recv2_button.setColour(juce::TextButton::textColourOffId,
+                           juce::Colours::white.withAlpha(0.85f));
+    recv2_button.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    recv2_button.addListener(this);
+    addAndMakeVisible(recv2_button);
+
+    for (auto* b : {&dev1_settings, &rdev1_settings, &recv2_settings})
+    {
+        b->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff0e0e0e));
+        b->setColour(juce::TextButton::textColourOffId,
+                     juce::Colours::white.withAlpha(0.85f));
+        b->addListener(this);
+        addAndMakeVisible(b);
+    }
+
+    addAndMakeVisible(recv2_meter);
+    addAndMakeVisible(recv2_status);
+
+    // estas filas solo existen en la app independiente
+    if (!juce::JUCEApplicationBase::isStandaloneApp())
+        for (auto* c : std::initializer_list<juce::Component*>{
+                 &dev1_box, &rdev1_box, &dev1_settings, &rdev1_settings,
+                 &recv2_label, &recv2_source, &recv2_device, &recv2_button,
+                 &recv2_settings, &recv2_meter, &recv2_status})
+            c->setVisible(false);
+
     refreshDevices(true);
+    refreshDevices2(true);
 
     rxAttachment.reset(
         new ButtonAttachment(ap.getAPVTS(), "recv", *juce__recvButton));
@@ -205,7 +272,7 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
 
     //[/UserPreSize]
 
-    setSize (640, 550);
+    setSize (640, 640);
 
 
     //[Constructor] You can add your own custom stuff here..
@@ -214,7 +281,7 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
     startTimer(33); // ~30 fps para los medidores
 
     setResizable(true, false);
-    setResizeLimits(480, 413, INT16_MAX, INT16_MAX);
+    setResizeLimits(480, 480, INT16_MAX, INT16_MAX);
 
     // if (juce::JUCEApplicationBase::isStandaloneApp())
     // {
@@ -233,7 +300,8 @@ NdiAudioProcessorEditor::NdiAudioProcessorEditor (NdiAudioProcessor& p)
 NdiAudioProcessorEditor::~NdiAudioProcessorEditor()
 {
     //[Destructor_pre]. You can add your own custom destruction code here..
-    settings2_window = nullptr; // su selector usa el gestor del procesador
+    settings2_window = nullptr; // sus selectores usan gestores del procesador
+    settingsR2_window = nullptr;
     rxAttachment = nullptr;
     txAttachment = nullptr;
     comboboxAttachment = nullptr;
@@ -260,7 +328,7 @@ void NdiAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillAll (juce::Colour (0xff0e0e0e));
 
     {
-        int x = proportionOfWidth (0.2703f), y = proportionOfHeight (0.1727f), width = proportionOfWidth (0.2000f), height = proportionOfHeight (0.1018f);
+        int x = proportionOfWidth (0.2703f), y = proportionOfHeight (0.0219f), width = proportionOfWidth (0.2000f), height = proportionOfHeight (0.0875f);
         //[UserPaintCustomArguments] Customize the painting arguments here..
         //[/UserPaintCustomArguments]
         g.setColour (juce::Colours::black);
@@ -271,14 +339,14 @@ void NdiAudioProcessorEditor::paint (juce::Graphics& g)
     }
 
     {
-        int x = proportionOfWidth (0.6078f), y = proportionOfHeight (0.1436f), width = proportionOfWidth (0.3422f), height = proportionOfHeight (0.1145f);
+        int x = proportionOfWidth (0.6078f), y = proportionOfHeight (0.0f), width = proportionOfWidth (0.3422f), height = proportionOfHeight (0.1094f);
         juce::String text (TRANS("Audio IO"));
         juce::Colour fillColour = juce::Colour (0xff6257ff);
         //[UserPaintCustomArguments] Customize the painting arguments here..
         g.setFont(
             juce::Font("Arial",
                        static_cast<float>(jmin(proportionOfWidth(0.09375f),
-                                               proportionOfHeight(0.1091f))),
+                                               proportionOfHeight(0.0938f))),
                        juce::Font::plain)
                 .withTypefaceStyle("Black"));
         g.setColour(fillColour);
@@ -309,42 +377,57 @@ void NdiAudioProcessorEditor::resized()
     juce__recvButton->setBounds (proportionOfWidth (0.6750f), proportionOfHeight (0.7063f), proportionOfWidth (0.2141f), proportionOfHeight (0.0917f));
     //[UserResized] Add your own custom resize handling here..
     {
-        // Distribucion en pixeles sobre un diseno de 640 x 550; todo escala
-        // con el tamano de la ventana.
+        // Distribucion en pixeles sobre un diseno de 640 x 640; todo escala
+        // con el tamano de la ventana. Cuatro secciones iguales:
+        //   etiqueta / fila principal + boton / fila de dispositivo + AJUSTES /
+        //   medidor / estado
         auto Y = [this](float px)
-        { return juce::roundToInt(px * (float) getHeight() / 550.0f); };
+        { return juce::roundToInt(px * (float) getHeight() / 640.0f); };
 
-        const auto x  = proportionOfWidth (0.1375f);
-        const auto w  = proportionOfWidth (0.4500f);
-        const auto bx = proportionOfWidth (0.6750f);
-        const auto bw = proportionOfWidth (0.2141f);
-        const auto fs = juce::jlimit (10.0f, 13.0f, (float) getHeight() * 0.0235f);
+        const auto x  = proportionOfWidth (0.0900f);
+        const auto w  = proportionOfWidth (0.5700f);
+        const auto bx = proportionOfWidth (0.7000f);
+        const auto bw = proportionOfWidth (0.2100f);
+        const auto fs = juce::jlimit (10.0f, 13.0f, (float) getHeight() * 0.0200f);
 
-        for (auto* l : {&send_label, &send2_label, &recv_label})
+        for (auto* l : {&send_label, &send2_label, &recv_label, &recv2_label})
             l->setFont (juce::Font (fs));
 
         // ----- emisor 1 (dispositivo principal) -----
-        send_label.setBounds (x, Y (158), w, Y (20));
-        juce__textEditor->setBounds (x, Y (180), w, Y (38));
-        juce__sendButton->setBounds (bx, Y (180), bw, Y (38));
-        send_meter.setBounds (x, Y (222), w, Y (12));
-        send_status.setBounds (x, Y (237), w, Y (22));
+        send_label.setBounds (x, Y (84), w, Y (18));
+        juce__textEditor->setBounds (x, Y (104), w, Y (36));
+        juce__sendButton->setBounds (bx, Y (104), bw, Y (36));
+        dev1_box.setBounds (x, Y (144), w, Y (28));
+        dev1_settings.setBounds (bx, Y (144), bw, Y (28));
+        send_meter.setBounds (x, Y (176), w, Y (10));
+        send_status.setBounds (x, Y (189), w, Y (20));
 
-        // ----- emisor 2 (otro dispositivo) -----
-        send2_label.setBounds (x, Y (272), w, Y (20));
-        send2_name.setBounds (x, Y (294), w, Y (38));
-        send2_button.setBounds (bx, Y (294), bw, Y (38));
-        send2_device.setBounds (x, Y (336), w, Y (34));
-        send2_settings.setBounds (bx, Y (336), bw, Y (34));
-        send2_meter.setBounds (x, Y (374), w, Y (12));
-        send2_status.setBounds (x, Y (389), w, Y (22));
+        // ----- emisor 2 (otra tarjeta de entrada) -----
+        send2_label.setBounds (x, Y (221), w, Y (18));
+        send2_name.setBounds (x, Y (241), w, Y (36));
+        send2_button.setBounds (bx, Y (241), bw, Y (36));
+        send2_device.setBounds (x, Y (281), w, Y (28));
+        send2_settings.setBounds (bx, Y (281), bw, Y (28));
+        send2_meter.setBounds (x, Y (313), w, Y (10));
+        send2_status.setBounds (x, Y (326), w, Y (20));
 
-        // ----- recepcion -----
-        recv_label.setBounds (x, Y (424), w, Y (20));
-        combobox_sources->setBounds (x, Y (446), w, Y (38));
-        juce__recvButton->setBounds (bx, Y (446), bw, Y (38));
-        recv_meter.setBounds (x, Y (488), w, Y (12));
-        recv_status.setBounds (x, Y (503), w, Y (22));
+        // ----- receptor 1 (dispositivo principal) -----
+        recv_label.setBounds (x, Y (358), w, Y (18));
+        combobox_sources->setBounds (x, Y (378), w, Y (36));
+        juce__recvButton->setBounds (bx, Y (378), bw, Y (36));
+        rdev1_box.setBounds (x, Y (418), w, Y (28));
+        rdev1_settings.setBounds (bx, Y (418), bw, Y (28));
+        recv_meter.setBounds (x, Y (450), w, Y (10));
+        recv_status.setBounds (x, Y (463), w, Y (20));
+
+        // ----- receptor 2 (otra tarjeta de salida) -----
+        recv2_label.setBounds (x, Y (495), w, Y (18));
+        recv2_source.setBounds (x, Y (515), w, Y (36));
+        recv2_button.setBounds (bx, Y (515), bw, Y (36));
+        recv2_device.setBounds (x, Y (555), w, Y (28));
+        recv2_settings.setBounds (bx, Y (555), bw, Y (28));
+        recv2_meter.setBounds (x, Y (587), w, Y (10));
+        recv2_status.setBounds (x, Y (600), w, Y (20));
     }
     //[/UserResized]
 }
@@ -383,6 +466,24 @@ void NdiAudioProcessorEditor::comboBoxChanged (juce::ComboBox* comboBoxThatHasCh
         if (s2.isWanted())
             s2.reopenDevice();
     }
+    else if (comboBoxThatHasChanged == &recv2_source)
+    {
+        auto& r2 = ap.getReceiver2();
+        const auto text = recv2_source.getText().trim();
+        if (text != r2.getSourceName())
+        {
+            r2.setSourceName(text);
+            if (r2.isWanted())
+                r2.start(); // reconecta con la fuente nueva
+        }
+    }
+    else if (comboBoxThatHasChanged == &recv2_device)
+    {
+        auto& r2 = ap.getReceiver2();
+        r2.setDeviceName(recv2_device.getText());
+        if (r2.isWanted())
+            r2.reopenDevice();
+    }
 
     //[UsercomboBoxChanged_Post]
     //[/UsercomboBoxChanged_Post]
@@ -409,6 +510,31 @@ void NdiAudioProcessorEditor::buttonClicked (juce::Button* buttonThatWasClicked)
         //[/UserButtonCode_juce__recvButton]
     }
 
+    else if (buttonThatWasClicked == &dev1_settings ||
+             buttonThatWasClicked == &rdev1_settings)
+    {
+        // dialogo de ajustes del dispositivo principal (entrada y salida)
+        if (auto openMain = MainDeviceBridge::openSettings())
+            openMain();
+    }
+    else if (buttonThatWasClicked == &recv2_settings)
+    {
+        openReceiver2Settings();
+    }
+    else if (buttonThatWasClicked == &recv2_button)
+    {
+        auto& r2 = ap.getReceiver2();
+        if (recv2_button.getToggleState())
+        {
+            r2.setSourceName(recv2_source.getText());
+            r2.setDeviceName(recv2_device.getText());
+            r2.start(); // si la configuracion no es valida, el boton vuelve a "RECIBIR"
+        }
+        else
+        {
+            r2.stop();
+        }
+    }
     else if (buttonThatWasClicked == &send2_settings)
     {
         openSender2Settings();
@@ -482,6 +608,7 @@ void NdiAudioProcessorEditor::timerCallback()
     {
         device_scan_ticks = 0;
         refreshDevices(false);
+        refreshDevices2(false);
     }
 }
 
@@ -504,10 +631,87 @@ void NdiAudioProcessorEditor::openSender2Settings()
 
     s2.beginSettings();
 
-    settings2_window = std::make_unique<Sender2SettingsWindow>(
-        s2.getDeviceManager(),
+    settings2_window = std::make_unique<AudioSettingsWindow>(
+        "Ajustes de audio - Emisor 2",
+        s2.getDeviceManager(), false,
         getLookAndFeel().findColour(juce::ResizableWindow::backgroundColourId),
         [this]() { closeSender2Settings(); });
+}
+
+void NdiAudioProcessorEditor::openReceiver2Settings()
+{
+    if (settingsR2_window != nullptr)
+    {
+        settingsR2_window->toFront(true);
+        return;
+    }
+
+    auto& r2 = ap.getReceiver2();
+
+    if (r2.getDeviceName().isEmpty() && recv2_device.getNumItems() > 0)
+        r2.setDeviceName(recv2_device.getItemText(0));
+
+    if (r2.getDeviceName().isEmpty())
+        return; // no hay dispositivos de salida
+
+    r2.beginSettings();
+
+    settingsR2_window = std::make_unique<AudioSettingsWindow>(
+        "Ajustes de audio - Receptor 2",
+        r2.getDeviceManager(), true,
+        getLookAndFeel().findColour(juce::ResizableWindow::backgroundColourId),
+        [this]() { closeReceiver2Settings(); });
+}
+
+void NdiAudioProcessorEditor::closeReceiver2Settings()
+{
+    juce::MessageManager::callAsync(
+        [safe = juce::Component::SafePointer<NdiAudioProcessorEditor>(this)]()
+        {
+            if (auto* editor = safe.getComponent())
+            {
+                editor->ap.getReceiver2().endSettings();
+                editor->settingsR2_window = nullptr;
+                editor->refreshDevices2(false);
+            }
+        });
+}
+
+void NdiAudioProcessorEditor::refreshDevices2(bool force)
+{
+    if (!juce::JUCEApplicationBase::isStandaloneApp())
+        return;
+
+    auto& r2 = ap.getReceiver2();
+
+    juce::StringArray names;
+    if (r2.isWanted() && !force)
+    {
+        for (int i = 0; i < recv2_device.getNumItems(); ++i)
+            names.add(recv2_device.getItemText(i));
+    }
+    else
+    {
+        names = r2.scanOutputDevices();
+    }
+
+    const auto saved = r2.getDeviceName();
+    if (saved.isNotEmpty() && !names.contains(saved))
+        names.add(saved);
+
+    juce::StringArray current;
+    for (int i = 0; i < recv2_device.getNumItems(); ++i)
+        current.add(recv2_device.getItemText(i));
+
+    if (current != names)
+    {
+        recv2_device.clear(juce::dontSendNotification);
+        for (int i = 0; i < names.size(); ++i)
+            recv2_device.addItem(names[i], i + 1);
+    }
+
+    const auto idx = names.indexOf(saved);
+    recv2_device.setSelectedId(idx >= 0 ? idx + 1 : 0, juce::dontSendNotification);
 }
 
 void NdiAudioProcessorEditor::closeSender2Settings()
@@ -576,6 +780,69 @@ void NdiAudioProcessorEditor::updateIndicators()
     // el texto de los botones sigue su estado (activo = detener)
     juce__sendButton->setButtonText(juce__sendButton->getToggleState() ? "DETENER" : "ENVIAR");
     juce__recvButton->setButtonText(juce__recvButton->getToggleState() ? "DETENER" : "RECIBIR");
+
+    // ---------------- dispositivo principal y receptor 2 ----------------
+    if (juce::JUCEApplicationBase::isStandaloneApp())
+    {
+        // nombres del dispositivo principal (~2 veces por segundo)
+        if (++dev_label_ticks >= 15)
+        {
+            dev_label_ticks = 0;
+            const auto inName = MainDeviceBridge::inputName() ? MainDeviceBridge::inputName()() : String();
+            const auto outName = MainDeviceBridge::outputName() ? MainDeviceBridge::outputName()() : String();
+            dev1_box.setText("Entrada: " + (inName.isNotEmpty() ? inName : String("(ninguna - ver AJUSTES)")),
+                             juce::dontSendNotification);
+            rdev1_box.setText("Salida: " + (outName.isNotEmpty() ? outName : String("(ninguna - ver AJUSTES)")),
+                              juce::dontSendNotification);
+        }
+
+        auto& r2 = ap.getReceiver2();
+        const bool wantedR = r2.isWanted();
+        const bool runningR = r2.isAudioRunning();
+        const int connsR = r2.getConnections();
+        const float peakR = r2.takePeak();
+
+        recv2_button.setToggleState(wantedR, juce::dontSendNotification);
+        recv2_button.setButtonText(wantedR ? "DETENER" : "RECIBIR");
+
+        recv2_meter.setActive(wantedR && runningR && connsR > 0);
+        if (wantedR && runningR && connsR > 0)
+            recv2_meter.pushLevel(peakR);
+
+        if (connsR > 0 && runningR && peakR < 0.00003f)
+            ++recv2_silent_ticks;
+        else
+            recv2_silent_ticks = 0;
+
+        const auto srcName = r2.getSourceName();
+        if (!wantedR)
+        {
+            recv2_status.setStatus(r2.getError().isNotEmpty() ? State::error : State::off,
+                                   r2.getError().isNotEmpty() ? r2.getError()
+                                                              : String("Receptor 2 detenido"));
+        }
+        else if (!runningR)
+        {
+            const auto err = r2.getError();
+            const auto retry = r2.getRetries() > 0
+                                   ? " (reintento " + String(r2.getRetries()) + ")"
+                                   : String();
+            recv2_status.setStatus(err.isNotEmpty() ? State::error : State::waiting,
+                                   (err.isNotEmpty() ? err : String("Reconectando dispositivo")) + retry);
+        }
+        else if (connsR <= 0)
+        {
+            recv2_status.setStatus(State::waiting,
+                                   "Buscando: " + srcName +
+                                       (r2.getSearchRetries() > 0
+                                            ? " (reintento " + String(r2.getSearchRetries()) + ")"
+                                            : String()));
+        }
+        else if (recv2_silent_ticks > 150)
+            recv2_status.setStatus(State::ok, "Conectado (sin audio entrante): " + srcName);
+        else
+            recv2_status.setStatus(State::ok, "Conectado: " + srcName);
+    }
 
     // ---------------- emisor 2 ----------------
     if (juce::JUCEApplicationBase::isStandaloneApp())
@@ -706,6 +973,7 @@ void NdiAudioProcessorEditor::refreshSources()
 
     // actual NDI send name
     auto this_tx_name = ap.getNDISendName2();
+    const auto own_tx2_name = ap.getSender2().getFullSourceName();
 
     uint32_t no_sources;
     const NDIlib_source_t* p_sources =
@@ -715,8 +983,38 @@ void NdiAudioProcessorEditor::refreshSources()
     for (uint32_t i = 0; i < no_sources; i++)
     {
         String ndi_name = p_sources[i].p_ndi_name;
-        if (ndi_name != this_tx_name)
+        if (ndi_name != this_tx_name && ndi_name != own_tx2_name)
             combobox_sources->addItem(p_sources[i].p_ndi_name, (int)i + 1);
+    }
+
+    // lista de fuentes del receptor 2 (sin nuestros propios emisores)
+    if (juce::JUCEApplicationBase::isStandaloneApp())
+    {
+        auto& r2 = ap.getReceiver2();
+
+        juce::StringArray names;
+        for (uint32_t i = 0; i < no_sources; i++)
+        {
+            String ndi_name = p_sources[i].p_ndi_name;
+            if (ndi_name != this_tx_name && ndi_name != own_tx2_name)
+                names.add(ndi_name);
+        }
+
+        juce::StringArray current;
+        for (int i = 0; i < recv2_source.getNumItems(); ++i)
+            current.add(recv2_source.getItemText(i));
+
+        if (current != names)
+        {
+            recv2_source.clear(juce::dontSendNotification);
+            for (int i = 0; i < names.size(); ++i)
+                recv2_source.addItem(names[i], i + 1);
+        }
+
+        // el texto solo se sincroniza si el usuario no lo esta escribiendo
+        if (!recv2_source.hasKeyboardFocus(true) &&
+            recv2_source.getText() != r2.getSourceName())
+            recv2_source.setText(r2.getSourceName(), juce::dontSendNotification);
     }
 
     for (auto i = 0; i < combobox_sources->getNumItems(); i++)

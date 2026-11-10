@@ -46,6 +46,12 @@ class SecondarySender : private juce::AudioIODeviceCallback,
         return name;
     }
 
+    // Nombre completo del emisor en la red (vacio si esta apagado)
+    juce::String getFullSourceName() const
+    {
+        return fullName;
+    }
+
     void setDeviceName(const juce::String& newDevice)
     {
         if (newDevice != deviceName)
@@ -157,6 +163,10 @@ class SecondarySender : private juce::AudioIODeviceCallback,
 
             const juce::SpinLock::ScopedLockType sl(lock);
             ndi_send = instance;
+
+            // nombre completo en la red, p. ej. "PC (Emisor2)"
+            if (const auto* src = lib->send_get_source_name(instance))
+                fullName = juce::String::fromUTF8(src->p_ndi_name);
         }
 
         wanted = true;
@@ -182,6 +192,7 @@ class SecondarySender : private juce::AudioIODeviceCallback,
             ndi_send = nullptr;
         }
 
+        fullName.clear();
         connections.store(-1);
         retries = 0;
     }
@@ -463,6 +474,7 @@ class SecondarySender : private juce::AudioIODeviceCallback,
     juce::AudioDeviceManager deviceManager;
 
     juce::String name {"Emisor2"};
+    juce::String fullName;
     juce::String deviceName;
     juce::String typeName;       // tipo de driver (p. ej. "Windows Audio")
     double rateSetting = 48000.0; // frecuencia de muestreo

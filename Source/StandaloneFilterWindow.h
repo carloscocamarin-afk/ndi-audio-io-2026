@@ -26,6 +26,7 @@
 #pragma once
 
 #include "CustomLookAndFeel.h"
+#include "MainDeviceBridge.h"
 #include <JuceHeader.h>
 
 #ifndef DOXYGEN
@@ -858,11 +859,35 @@ class StandaloneFilterWindow : public DocumentWindow,
 
         // guarda el estado cada pocos segundos (ver timerCallback)
         startTimer(5000);
+
+        // puente para que el editor abra los ajustes del dispositivo principal
+        // y muestre sus nombres
+        MainDeviceBridge::openSettings() = [this]()
+        {
+            if (pluginHolder != nullptr)
+                pluginHolder->showAudioSettingsDialog();
+        };
+        MainDeviceBridge::inputName() = [this]() -> String
+        {
+            return pluginHolder != nullptr
+                       ? pluginHolder->deviceManager.getAudioDeviceSetup().inputDeviceName
+                       : String();
+        };
+        MainDeviceBridge::outputName() = [this]() -> String
+        {
+            return pluginHolder != nullptr
+                       ? pluginHolder->deviceManager.getAudioDeviceSetup().outputDeviceName
+                       : String();
+        };
     }
 
     ~StandaloneFilterWindow() override
     {
         stopTimer();
+
+        MainDeviceBridge::openSettings() = nullptr;
+        MainDeviceBridge::inputName() = nullptr;
+        MainDeviceBridge::outputName() = nullptr;
 
 #if (!JUCE_IOS) && (!JUCE_ANDROID)
         if (auto* props = pluginHolder->settings.get())

@@ -213,6 +213,7 @@ NdiAudioProcessor::~NdiAudioProcessor()
 {
     // el segundo emisor debe cerrarse antes de descargar la libreria NDI
     sender2.stop();
+    receiver2.stop();
 
     if (!p_NDILib)
         return;
@@ -542,6 +543,9 @@ void NdiAudioProcessor::getStateInformation(juce::MemoryBlock &destData)
     auto node2 = state.getOrCreateChildWithName("sender2", nullptr);
     node2.copyPropertiesFrom(sender2.getState(), nullptr);
 
+    auto node3 = state.getOrCreateChildWithName("recv2", nullptr);
+    node3.copyPropertiesFrom(receiver2.getState(), nullptr);
+
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -572,6 +576,13 @@ void NdiAudioProcessor::setStateInformation(const void *data, int sizeInBytes)
     {
         sender2.setNDILib(p_NDILib);
         sender2.restore(node2);
+    }
+
+    auto node3 = apvts.state.getChildWithName("recv2");
+    if (node3.isValid())
+    {
+        receiver2.setNDILib(p_NDILib);
+        receiver2.restore(node3);
     }
 
     return;

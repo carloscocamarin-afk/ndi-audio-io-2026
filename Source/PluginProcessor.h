@@ -21,6 +21,7 @@
 #endif
 #include <Processing.NDI.Lib.h>
 #include "SecondarySender.h"
+#include "SecondaryReceiver.h"
 //==============================================================================
 /**
  */
@@ -244,6 +245,14 @@ public:
         return sender2;
     }
 
+    // Segundo receptor NDI con su propia tarjeta de salida (solo app
+    // independiente).
+    SecondaryReceiver &getReceiver2()
+    {
+        receiver2.setNDILib(p_NDILib);
+        return receiver2;
+    }
+
     //==========================================================================
     // Estado y niveles para la interfaz (seguros para leer desde la UI).
     // Los valores los actualiza el hilo de audio.
@@ -319,6 +328,7 @@ private:
     bool recv_ok{false};
 
     SecondarySender sender2;
+    SecondaryReceiver receiver2;
 
     // estado visible para la interfaz
     std::atomic<float> send_peak{0.0f};

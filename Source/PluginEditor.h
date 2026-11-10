@@ -22,6 +22,7 @@
 //[Headers]     -- You can add your own extra header files here --
 #include "CustomLookAndFeel.h"
 #include "StatusWidgets.h"
+#include "MainDeviceBridge.h"
 #include "PluginProcessor.h"
 #include <JuceHeader.h>
 
@@ -35,7 +36,7 @@
     Describe your class and how it works here!
                                                                     //[/Comments]
 */
-class Sender2SettingsWindow; // ventana de ajustes de audio del emisor 2
+class AudioSettingsWindow; // ventana de ajustes de audio (emisor 2 / receptor 2)
 
 class NdiAudioProcessorEditor : public juce::AudioProcessorEditor,
                                 private juce::Timer,
@@ -102,11 +103,29 @@ class NdiAudioProcessorEditor : public juce::AudioProcessorEditor,
     LevelMeter send2_meter;
     StatusIndicator send2_status;
     juce::TextButton send2_settings {"AJUSTES"};
-    std::unique_ptr<Sender2SettingsWindow> settings2_window;
+    std::unique_ptr<AudioSettingsWindow> settings2_window;
     int device_scan_ticks {0};
+
+    // fila de dispositivo del emisor 1 / receptor 1 (dispositivo principal,
+    // se configura en el dialogo principal)
+    juce::Label dev1_box, rdev1_box;
+    juce::TextButton dev1_settings {"AJUSTES"}, rdev1_settings {"AJUSTES"};
+    int dev_label_ticks {1000};
+
+    // receptor 2 (otra tarjeta de salida)
+    juce::Label recv2_label;
+    juce::ComboBox recv2_source, recv2_device;
+    juce::TextButton recv2_button {"RECIBIR"}, recv2_settings {"AJUSTES"};
+    LevelMeter recv2_meter;
+    StatusIndicator recv2_status;
+    std::unique_ptr<AudioSettingsWindow> settingsR2_window;
+    int recv2_silent_ticks {0};
 
     void openSender2Settings();
     void closeSender2Settings();
+    void openReceiver2Settings();
+    void closeReceiver2Settings();
+    void refreshDevices2(bool force);
 
     void refreshSources();
     void refreshDevices(bool force);
