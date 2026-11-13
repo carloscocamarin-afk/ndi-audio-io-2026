@@ -1,26 +1,27 @@
 #pragma once
 #include <JuceHeader.h>
 #include <Processing.NDI.Lib.h>
+#include "SecondaryDevice.h"
 #include <atomic>
 #include <string>
 
 //==============================================================================
-// Segundo receptor NDI con su PROPIA tarjeta de sonido de salida.
-//
-// El receptor 1 saca el audio por el dispositivo principal (Menu > Settings).
-// Este receptor se conecta a otra fuente NDI y la reproduce por otra tarjeta,
-// con su propio AudioDeviceManager.
+// Segundo receptor NDI. Reproduce una fuente NDI por la SALIDA del dispositivo
+// del segundo par (ver SecondaryDevice).
 //
 // - Usa el "frame-sync" de NDI: adapta el audio recibido al reloj de la tarjeta
 //   (aunque las dos tarjetas no esten sincronizadas entre si).
-// - Vigila el dispositivo (reintenta abrirlo si se desconecta) y la fuente
-//   (si pasan ~15 s sin conexion, recrea el receptor).
+// - Si la fuente no aparece en ~15 s, recrea el receptor. Esto solo ocurre
+//   mientras el receptor esta ACTIVADO (boton pulsado).
 //==============================================================================
 class SecondaryReceiver : private juce::AudioIODeviceCallback,
                           private juce::Timer
 {
   public:
-    SecondaryReceiver() = default;
+    explicit SecondaryReceiver(SecondaryDevice& sharedDevice)
+        : device(sharedDevice)
+    {
+    }
 
     ~SecondaryReceiver() override
     {
@@ -44,61 +45,6 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
         return sourceName;
     }
 
-    void setDeviceName(const juce::String& newDevice)
-    {
-        if (newDevice != deviceName)
-        {
-            outputMask = 0;
-            bufferSetting = 0;
-        }
-        deviceName = newDevice;
-    }
-
-    juce::String getDeviceName() const
-    {
-        return deviceName;
-    }
-
-    // Nombres de los dispositivos de SALIDA. No llamar con el dispositivo en uso.
-    juce::StringArray scanOutputDevices()
-    {
-        deviceManager.getAvailableDeviceTypes();
-        applySavedType();
-        if (auto* type = deviceManager.getCurrentDeviceTypeObject())
-        {
-            type->scanForDevices();
-            return type->getDeviceNames(false);
-        }
-        return {};
-    }
-
-    //==========================================================================
-    // Ajustes de audio (dialogo con tipo de driver, tarjeta, canales, etc.)
-    juce::AudioDeviceManager& getDeviceManager()
-    {
-        return deviceManager;
-    }
-
-    void beginSettings()
-    {
-        settingsOpen = true;
-        if (!wanted)
-            openDevice();
-    }
-
-    void endSettings()
-    {
-        captureSetup();
-        settingsOpen = false;
-        stale_seconds = 0;
-
-        if (!wanted)
-        {
-            closeDevice();
-            lastError.clear();
-        }
-    }
-
     //==========================================================================
     // Control
     bool isWanted() const
@@ -106,8 +52,8 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
         return wanted;
     }
 
-    // Arranca el receptor. Devuelve false si la configuracion no es valida; si
-    // la tarjeta no se puede abrir, sigue "deseado" y se reintenta solo.
+    // Arranca el receptor. Devuelve false si la configuracion no es valida
+    // (falta la fuente o elegir la salida en AJUSTES).
     bool start()
     {
         stop();
@@ -123,11 +69,6 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
             lastError = "Elige una fuente";
             return false;
         }
-        if (deviceName.isEmpty())
-        {
-            lastError = "Elige un dispositivo";
-            return false;
-        }
         if (!createReceiver())
         {
             lastError = "No se pudo crear el receptor NDI";
@@ -135,14 +76,19 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
         }
 
         wanted = true;
-        retries = 0;
         search_retries = 0;
-        stale_seconds = 0;
         search_seconds = 0;
         connections.store(0);
         startTimerHz(1);
 
-        openDevice();
+        if (!device.attach(this, false, true))
+        {
+            const auto message = device.getError();
+            stop();
+            lastError = message;
+            return false;
+        }
+
         return true;
     }
 
@@ -150,33 +96,23 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
     {
         wanted = false;
         stopTimer();
-        closeDevice();
+        device.detach(this);
         destroyReceiver();
         connections.store(-1);
-        retries = 0;
         search_retries = 0;
-    }
-
-    void reopenDevice()
-    {
-        if (!wanted)
-            return;
-
-        retries = 0;
-        stale_seconds = 0;
-        openDevice();
     }
 
     //==========================================================================
     // Estado para la interfaz
     juce::String getError() const
     {
-        return lastError;
+        return wanted ? (lastError.isNotEmpty() ? lastError : device.getError())
+                      : lastError;
     }
 
     int getRetries() const // reintentos de la tarjeta
     {
-        return retries;
+        return device.getRetries();
     }
 
     int getSearchRetries() const // reintentos de la fuente
@@ -197,8 +133,7 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
 
     bool isAudioRunning() const
     {
-        return (juce::Time::getMillisecondCounter() - last_block_ms.load()) <
-               1000u;
+        return device.isRunning();
     }
 
     //==========================================================================
@@ -207,12 +142,7 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
     {
         juce::ValueTree v("recv2");
         v.setProperty("source", sourceName, nullptr);
-        v.setProperty("device", deviceName, nullptr);
         v.setProperty("active", wanted, nullptr);
-        v.setProperty("type", typeName, nullptr);
-        v.setProperty("rate", rateSetting, nullptr);
-        v.setProperty("buffer", bufferSetting, nullptr);
-        v.setProperty("channels", outputMask, nullptr);
         return v;
     }
 
@@ -222,11 +152,6 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
             return;
 
         sourceName = v["source"].toString();
-        deviceName = v["device"].toString();
-        typeName = v["type"].toString();
-        rateSetting = v.hasProperty("rate") ? (double)v["rate"] : 48000.0;
-        bufferSetting = (int)v["buffer"];
-        outputMask = (int)v["channels"];
 
         if ((bool)v["active"])
             start();
@@ -278,125 +203,18 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
         ndi_recv = nullptr;
     }
 
-    //==========================================================================
-    // Dispositivo de salida
-    void applySavedType()
-    {
-        if (typeName.isEmpty() || deviceManager.getCurrentAudioDevice() != nullptr)
-            return;
-
-        if (deviceManager.getCurrentAudioDeviceType() != typeName)
-            deviceManager.setCurrentAudioDeviceType(typeName, false);
-    }
-
-    void captureSetup()
-    {
-        const auto setup = deviceManager.getAudioDeviceSetup();
-        if (setup.outputDeviceName.isNotEmpty())
-            deviceName = setup.outputDeviceName;
-
-        const auto type = deviceManager.getCurrentAudioDeviceType();
-        if (type.isNotEmpty())
-            typeName = type;
-
-        if (auto* device = deviceManager.getCurrentAudioDevice())
-        {
-            rateSetting = device->getCurrentSampleRate();
-            bufferSetting = device->getCurrentBufferSizeSamples();
-            outputMask = device->getActiveOutputChannels().toInteger();
-        }
-    }
-
-    void openDevice()
-    {
-        closeDevice();
-        lastError.clear();
-
-        deviceManager.getAvailableDeviceTypes();
-        applySavedType();
-        auto* type = deviceManager.getCurrentDeviceTypeObject();
-        if (type == nullptr)
-        {
-            lastError = "No hay drivers de audio";
-            return;
-        }
-
-        type->scanForDevices();
-
-        int numChannels = 0;
-        {
-            std::unique_ptr<juce::AudioIODevice> probe(
-                type->createDevice(deviceName, {}));
-            if (probe != nullptr)
-                numChannels = probe->getOutputChannelNames().size();
-        }
-
-        if (numChannels <= 0)
-        {
-            lastError = "Dispositivo no disponible: " + deviceName;
-            return;
-        }
-
-        // canales de salida elegidos (0 = automatico: los dos primeros)
-        juce::BigInteger channels((juce::int32)outputMask);
-        juce::BigInteger valid;
-        valid.setRange(0, numChannels, true);
-        channels &= valid;
-        if (channels.isZero())
-            channels.setRange(0, juce::jmin(2, numChannels), true);
-
-        juce::AudioDeviceManager::AudioDeviceSetup setup;
-        setup.inputDeviceName = {};
-        setup.outputDeviceName = deviceName;
-        setup.useDefaultInputChannels = false;
-        setup.inputChannels.clear();
-        setup.useDefaultOutputChannels = false;
-        setup.outputChannels = channels;
-        setup.sampleRate = rateSetting > 0.0 ? rateSetting : 48000.0;
-        setup.bufferSize = bufferSetting;
-
-        const auto error = deviceManager.setAudioDeviceSetup(setup, false);
-        if (error.isNotEmpty())
-        {
-            lastError = error.upToFirstOccurrenceOf("\n", false, false);
-            closeDevice();
-            return;
-        }
-
-        deviceManager.addAudioCallback(this);
-    }
-
-    void closeDevice()
-    {
-        deviceManager.removeAudioCallback(this);
-        deviceManager.closeAudioDevice();
-        last_block_ms.store(0);
-    }
-
-    // Cada segundo: vigila la tarjeta y la conexion con la fuente.
+    // Cada segundo: si la fuente no aparece, recrea el receptor cada ~15 s.
     void timerCallback() override
     {
-        if (!wanted || settingsOpen)
-            return;
-
-        if (!isAudioRunning())
+        if (!wanted || !device.isRunning())
         {
             search_seconds = 0;
-            if (++stale_seconds >= 5)
-            {
-                stale_seconds = 0;
-                ++retries;
-                openDevice();
-            }
             return;
         }
-
-        stale_seconds = 0;
-        retries = 0;
 
         if (connections.load() == 0)
         {
-            // NDI ya reconecta solo; si pasan ~15 s buscando, se recrea el receptor
+            // NDI ya reconecta solo; esto es un respaldo
             if (++search_seconds >= 15)
             {
                 search_seconds = 0;
@@ -416,9 +234,9 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
 
     //==========================================================================
     // Hilo de audio
-    void audioDeviceAboutToStart(juce::AudioIODevice* device) override
+    void audioDeviceAboutToStart(juce::AudioIODevice* audioDevice) override
     {
-        sample_rate.store((int)device->getCurrentSampleRate());
+        sample_rate.store((int)audioDevice->getCurrentSampleRate());
         poll_samples = 0;
     }
 
@@ -435,7 +253,7 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
             if (outputChannelData[i] != nullptr)
                 juce::FloatVectorOperations::clear(outputChannelData[i], numSamples);
 
-        last_block_ms.store(juce::Time::getMillisecondCounter());
+        device.beat();
 
         const juce::SpinLock::ScopedTryLockType sl(lock);
         if (!sl.isLocked() || framesync == nullptr || ndi_recv == nullptr ||
@@ -495,21 +313,13 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
     }
 
     //==========================================================================
+    SecondaryDevice& device;
     const NDIlib_v5* lib = nullptr;
-    juce::AudioDeviceManager deviceManager;
 
     juce::String sourceName;
-    juce::String deviceName;
-    juce::String typeName;
-    double rateSetting = 48000.0;
-    int bufferSetting = 0;
-    int outputMask = 0;
-    bool settingsOpen = false;
     juce::String lastError;
     bool wanted = false;
-    int retries = 0;
     int search_retries = 0;
-    int stale_seconds = 0;
     int search_seconds = 0;
 
     juce::SpinLock lock;
@@ -520,7 +330,6 @@ class SecondaryReceiver : private juce::AudioIODeviceCallback,
     std::atomic<float> peak {0.0f};
     std::atomic<int> connections {-1};
     std::atomic<int> sample_rate {48000};
-    std::atomic<uint32_t> last_block_ms {0};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SecondaryReceiver)
 };

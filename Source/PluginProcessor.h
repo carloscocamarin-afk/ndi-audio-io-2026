@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #endif
 #include <Processing.NDI.Lib.h>
+#include "SecondaryDevice.h"
 #include "SecondarySender.h"
 #include "SecondaryReceiver.h"
 //==============================================================================
@@ -83,6 +84,10 @@ public:
     void setStateInformation(const void *data, int sizeInBytes) override;
 
     void parameterChanged(const String &parameterID, float newValue) override;
+
+    // Reinicia el receptor principal con la fuente actual. Solo recibe si el
+    // boton RECIBIR esta pulsado; si no, queda detenido.
+    void restartReceiver();
 
     AudioProcessorValueTreeState &getAPVTS()
     {
@@ -237,16 +242,23 @@ public:
     }
 
     //==========================================================================
-    // Segundo emisor NDI con su propio dispositivo de audio (solo app
-    // independiente).
+    // Segundo emisor NDI (envia la entrada del dispositivo del segundo par;
+    // solo app independiente).
     SecondarySender &getSender2()
     {
         sender2.setNDILib(p_NDILib);
         return sender2;
     }
 
-    // Segundo receptor NDI con su propia tarjeta de salida (solo app
-    // independiente).
+    // Dispositivo de audio del segundo par (entrada del emisor 2 + salida del
+    // receptor 2).
+    SecondaryDevice &getDevice2()
+    {
+        return device2;
+    }
+
+    // Segundo receptor NDI (reproduce por la salida del dispositivo del
+    // segundo par; solo app independiente).
     SecondaryReceiver &getReceiver2()
     {
         receiver2.setNDILib(p_NDILib);
@@ -327,8 +339,13 @@ private:
     bool send_ok{false};
     bool recv_ok{false};
 
-    SecondarySender sender2;
-    SecondaryReceiver receiver2;
+    SecondaryDevice device2;
+    SecondarySender sender2{device2};
+    SecondaryReceiver receiver2{device2};
+
+    // (re)crea o destruye el receptor principal. Llamar con parameter_lock y
+    // audio_lock tomados.
+    void applyReceiverLocked(bool wantOn);
 
     // estado visible para la interfaz
     std::atomic<float> send_peak{0.0f};

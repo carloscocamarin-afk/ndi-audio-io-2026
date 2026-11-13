@@ -546,6 +546,9 @@ void NdiAudioProcessor::getStateInformation(juce::MemoryBlock &destData)
     auto node3 = state.getOrCreateChildWithName("recv2", nullptr);
     node3.copyPropertiesFrom(receiver2.getState(), nullptr);
 
+    auto node4 = state.getOrCreateChildWithName("pair2", nullptr);
+    node4.copyPropertiesFrom(device2.getState(), nullptr);
+
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -569,6 +572,11 @@ void NdiAudioProcessor::setStateInformation(const void *data, int sizeInBytes)
 
     parameterChanged("recv", apvts.getRawParameterValue("recv")->load());
     parameterChanged("send", apvts.getRawParameterValue("send")->load());
+
+    // segundo par: primero el dispositivo, luego el emisor y el receptor
+    auto node4 = apvts.state.getChildWithName("pair2");
+    if (node4.isValid())
+        device2.restore(node4);
 
     // segundo emisor: si estaba activo, se reanuda
     auto node2 = apvts.state.getChildWithName("sender2");
@@ -625,43 +633,65 @@ void NdiAudioProcessor::parameterChanged(const String &parameterID,
             tx_connections.store(0);
         }
     }
-    if (parameterID == "recv" || parameterID == "ndi_recv")
-    {
-        recv_ok = false;
-        rx_connections.store(-1);
-
-        if (newValue >= 0.5f || parameterID == "ndi_recv")
-        {
-            if (ndi_framesync)
-            {
-                p_NDILib->framesync_destroy(ndi_framesync);
-                ndi_framesync = nullptr;
-            }
-
-            if (ndi_recv)
-            {
-                auto p = ndi_recv;
-                ndi_recv = nullptr;
-                p_NDILib->recv_destroy(p);
-            }
-
-            auto name = ndi_recv_name.getCharPointer();
-            ndi_recv_create.source_to_connect_to.p_ndi_name = name;
-
-            ndi_recv_create.p_ndi_recv_name = ndi_send_name.getCharPointer();
-
-            ndi_recv = p_NDILib->recv_create_v3(&ndi_recv_create);
-            ndi_framesync = p_NDILib->framesync_create(ndi_recv);
-
-            p_NDILib->recv_add_connection_metadata(ndi_recv, &ndi_metadata);
-
-            recv_ok = true;
-            rx_connections.store(0);
-        }
-    }
+    // Solo el boton "recv" arranca o detiene el receptor. Elegir otra fuente
+    // en la lista ("ndi_recv") NO lo arranca: la fuente se cambia con
+    // restartReceiver(), que respeta el boton.
+    if (parameterID == "recv")
+        applyReceiverLocked(newValue >= 0.5f);
 
     audio_lock.exit();
     parameter_lock.exit();
+}
+
+void NdiAudioProcessor::restartReceiver()
+{
+    if (!p_NDILib)
+        return;
+
+    parameter_lock.enter();
+    audio_lock.enter();
+
+    applyReceiverLocked(apvts.getRawParameterValue("recv")->load() >= 0.5f);
+
+    audio_lock.exit();
+    parameter_lock.exit();
+}
+
+void NdiAudioProcessor::applyReceiverLocked(bool wantOn)
+{
+    recv_ok = false;
+    rx_connections.store(-1);
+
+    // siempre se suelta el receptor anterior: al detener o cambiar de fuente
+    // no debe quedar ninguna conexion abierta
+    if (ndi_framesync)
+    {
+        p_NDILib->framesync_destroy(ndi_framesync);
+        ndi_framesync = nullptr;
+    }
+
+    if (ndi_recv)
+    {
+        auto p = ndi_recv;
+        ndi_recv = nullptr;
+        p_NDILib->recv_destroy(p);
+    }
+
+    if (!wantOn || ndi_recv_name.isEmpty())
+        return;
+
+    auto name = ndi_recv_name.getCharPointer();
+    ndi_recv_create.source_to_connect_to.p_ndi_name = name;
+
+    ndi_recv_create.p_ndi_recv_name = ndi_send_name.getCharPointer();
+
+    ndi_recv = p_NDILib->recv_create_v3(&ndi_recv_create);
+    ndi_framesync = p_NDILib->framesync_create(ndi_recv);
+
+    p_NDILib->recv_add_connection_metadata(ndi_recv, &ndi_metadata);
+
+    recv_ok = true;
+    rx_connections.store(0);
 }
 
 //==============================================================================

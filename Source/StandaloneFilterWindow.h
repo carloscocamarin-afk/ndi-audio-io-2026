@@ -754,9 +754,7 @@ class StandalonePluginHolder : private AudioIODeviceCallback,
 
     @tags{Audio}
 */
-class StandaloneFilterWindow : public DocumentWindow,
-                               private Button::Listener,
-                               private Timer
+class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
 {
   public:
     //==============================================================================
@@ -857,8 +855,14 @@ class StandaloneFilterWindow : public DocumentWindow,
                 setResizable(editor->isResizable(), false);
 #endif
 
-        // guarda el estado cada pocos segundos (ver timerCallback)
-        startTimer(5000);
+        // guarda el estado cada 5 s: antes solo se guardaba al cerrar con el
+        // boton, asi que un apagado de Windows o un cierre forzado lo perdia
+        saveTimer.onTick = [this]()
+        {
+            if (pluginHolder != nullptr)
+                pluginHolder->savePluginState();
+        };
+        saveTimer.startTimer(5000);
 
         // puente para que el editor abra los ajustes del dispositivo principal
         // y muestre sus nombres
@@ -883,7 +887,7 @@ class StandaloneFilterWindow : public DocumentWindow,
 
     ~StandaloneFilterWindow() override
     {
-        stopTimer();
+        saveTimer.stopTimer();
 
         MainDeviceBridge::openSettings() = nullptr;
         MainDeviceBridge::inputName() = nullptr;
@@ -981,15 +985,6 @@ class StandaloneFilterWindow : public DocumentWindow,
     std::unique_ptr<StandalonePluginHolder> pluginHolder;
 
   private:
-    // Guarda el estado (enviando/recibiendo, nombres, fuente) cada 5 s. Antes
-    // solo se guardaba al cerrar con el boton, asi que un apagado de Windows o
-    // un cierre forzado perdia lo que estaba activo.
-    void timerCallback() override
-    {
-        if (pluginHolder != nullptr)
-            pluginHolder->savePluginState();
-    }
-
 #if JUCE_WINDOWS
     // Inicio automatico con Windows (clave Run del usuario actual; no requiere
     // permisos de administrador).
@@ -1309,6 +1304,19 @@ class StandaloneFilterWindow : public DocumentWindow,
     //==============================================================================
     TextButton optionsButton;
     DecoratorConstrainer decoratorConstrainer;
+
+    // Temporizador como MIEMBRO (no como clase base) y al final de la clase, para
+    // no alterar la estructura de la ventana respecto a la de JUCE.
+    struct SaveTimer : public Timer
+    {
+        std::function<void()> onTick;
+        void timerCallback() override
+        {
+            if (onTick)
+                onTick();
+        }
+    };
+    SaveTimer saveTimer;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StandaloneFilterWindow)
 };
