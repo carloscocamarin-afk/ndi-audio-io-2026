@@ -29,4 +29,19 @@ struct MainDeviceBridge
         static std::function<juce::String()> fn;
         return fn;
     }
+
+    // Tarjeta guardada que todavia NO esta disponible (vacio si la guardada ya
+    // es la que esta en uso). Mientras tanto la app usa otra de emergencia y
+    // vuelve sola a la guardada cuando aparece.
+    static std::function<juce::String()> &pendingInput()
+    {
+        static std::function<juce::String()> fn;
+        return fn;
+    }
+
+    static std::function<juce::String()> &pendingOutput()
+    {
+        static std::function<juce::String()> fn;
+        return fn;
+    }
 };

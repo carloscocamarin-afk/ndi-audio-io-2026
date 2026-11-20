@@ -622,10 +622,25 @@ void NdiAudioProcessorEditor::updateIndicators()
             dev_label_ticks = 0;
             const auto inName = MainDeviceBridge::inputName() ? MainDeviceBridge::inputName()() : String();
             const auto outName = MainDeviceBridge::outputName() ? MainDeviceBridge::outputName()() : String();
-            dev1_box.setText("Entrada: " + (inName.isNotEmpty() ? inName : String("(ninguna - ver AJUSTES)")),
-                             juce::dontSendNotification);
-            rdev1_box.setText("Salida: " + (outName.isNotEmpty() ? outName : String("(ninguna - ver AJUSTES)")),
-                              juce::dontSendNotification);
+            const auto waitIn = MainDeviceBridge::pendingInput() ? MainDeviceBridge::pendingInput()() : String();
+            const auto waitOut = MainDeviceBridge::pendingOutput() ? MainDeviceBridge::pendingOutput()() : String();
+
+            // si la tarjeta guardada aun no esta disponible, se avisa en ambar
+            // (la app usa otra de emergencia y vuelve sola a la guardada)
+            auto showDevice = [](juce::Label& box, const String& prefix,
+                                 const String& current, const String& waiting)
+            {
+                String text = prefix + (current.isNotEmpty() ? current : String("(ninguna - ver AJUSTES)"));
+                if (waiting.isNotEmpty())
+                    text += "  -  esperando: " + waiting;
+
+                box.setText(text, juce::dontSendNotification);
+                box.setColour(juce::Label::textColourId,
+                              waiting.isNotEmpty() ? juce::Colour(0xffe5a53d)
+                                                   : juce::Colours::white.withAlpha(0.7f));
+            };
+            showDevice(dev1_box, "Entrada: ", inName, waitIn);
+            showDevice(rdev1_box, "Salida: ", outName, waitOut);
 
             // dispositivo del segundo par (se elige en AJUSTES del emisor 2)
             const auto in2 = ap.getDevice2().getInputName();

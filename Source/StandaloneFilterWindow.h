@@ -857,12 +857,21 @@ class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
 
         // guarda el estado cada 5 s: antes solo se guardaba al cerrar con el
         // boton, asi que un apagado de Windows o un cierre forzado lo perdia
+        // Cada segundo: vigila que se use la tarjeta guardada; cada 5 s guarda.
         saveTimer.onTick = [this]()
         {
-            if (pluginHolder != nullptr)
+            if (pluginHolder == nullptr)
+                return;
+
+            if (++saveTicks >= 5)
+            {
+                saveTicks = 0;
                 pluginHolder->savePluginState();
+            }
+
+            restoreSavedDevices();
         };
-        saveTimer.startTimer(5000);
+        saveTimer.startTimer(1000);
 
         // puente para que el editor abra los ajustes del dispositivo principal
         // y muestre sus nombres
@@ -883,6 +892,10 @@ class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
                        ? pluginHolder->deviceManager.getAudioDeviceSetup().outputDeviceName
                        : String();
         };
+        MainDeviceBridge::pendingInput() = [this]() -> String
+        { return pendingInputName; };
+        MainDeviceBridge::pendingOutput() = [this]() -> String
+        { return pendingOutputName; };
     }
 
     ~StandaloneFilterWindow() override
@@ -892,6 +905,8 @@ class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
         MainDeviceBridge::openSettings() = nullptr;
         MainDeviceBridge::inputName() = nullptr;
         MainDeviceBridge::outputName() = nullptr;
+        MainDeviceBridge::pendingInput() = nullptr;
+        MainDeviceBridge::pendingOutput() = nullptr;
 
 #if (!JUCE_IOS) && (!JUCE_ANDROID)
         if (auto* props = pluginHolder->settings.get())
@@ -985,6 +1000,90 @@ class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
     std::unique_ptr<StandalonePluginHolder> pluginHolder;
 
   private:
+    // Si al arrancar la tarjeta guardada no esta disponible (una USB que tarda,
+    // un cable virtual que carga tarde...), JUCE abre otra por defecto y se
+    // queda con ella. Esto vuelve a la tarjeta guardada en cuanto aparece.
+    //
+    // Lo "guardado" es lo ultimo que el usuario eligio de forma explicita
+    // (createStateXml): JUCE lo conserva aunque tenga que abrir otra tarjeta
+    // de emergencia. Si el usuario elige otra en Settings, eso pasa a ser lo
+    // guardado y aqui no se interviene.
+    void restoreSavedDevices()
+    {
+        if (deviceBackoff > 0)
+        {
+            --deviceBackoff;
+            return;
+        }
+
+        // con el dialogo de ajustes abierto no se toca nada
+        if (Component::getNumCurrentlyModalComponents() > 0)
+            return;
+
+        auto& manager = pluginHolder->deviceManager;
+        auto saved = manager.createStateXml();
+        if (saved == nullptr)
+        {
+            pendingInputName = pendingOutputName = String();
+            return;
+        }
+
+        String wantedInput = saved->getStringAttribute("audioInputDeviceName");
+        String wantedOutput = saved->getStringAttribute("audioOutputDeviceName");
+
+        // tipos de driver con entrada y salida unidas
+        const auto joined = saved->getStringAttribute("audioDeviceName");
+        if (joined.isNotEmpty())
+            wantedInput = wantedOutput = joined;
+
+        const auto setup = manager.getAudioDeviceSetup();
+        const bool open = manager.getCurrentAudioDevice() != nullptr;
+        const bool inputOk = wantedInput.isEmpty() || (open && setup.inputDeviceName == wantedInput);
+        const bool outputOk = wantedOutput.isEmpty() || (open && setup.outputDeviceName == wantedOutput);
+
+        pendingInputName = inputOk ? String() : wantedInput;
+        pendingOutputName = outputOk ? String() : wantedOutput;
+
+        if (inputOk && outputOk)
+            return;
+
+        // La guardada no es la que esta en uso: se mira si ya esta disponible.
+        // (Se reintenta cada ~4 s.)
+        deviceBackoff = 3;
+
+        manager.getAvailableDeviceTypes();
+
+        AudioIODeviceType* type = nullptr;
+        const auto typeName = saved->getStringAttribute("deviceType");
+        for (auto* t : manager.getAvailableDeviceTypes())
+            if (t->getTypeName() == typeName)
+                type = t;
+        if (type == nullptr)
+            type = manager.getCurrentDeviceTypeObject();
+        if (type == nullptr)
+            return;
+
+        type->scanForDevices();
+
+        if (wantedInput.isNotEmpty() && !type->getDeviceNames(true).contains(wantedInput))
+            return;
+        if (wantedOutput.isNotEmpty() && !type->getDeviceNames(false).contains(wantedOutput))
+            return;
+
+        // Ya estan: se reabre con lo guardado. Si no se deja abrir, JUCE habria
+        // cerrado la tarjeta de emergencia: se reabre la anterior para no
+        // quedarnos sin audio, y se espera 30 s antes de volver a intentarlo.
+        const auto previous = setup;
+        const auto error = manager.initialise(pluginHolder->getNumInputChannels(),
+                                              pluginHolder->getNumOutputChannels(),
+                                              saved.get(), false);
+        if (error.isNotEmpty())
+        {
+            manager.setAudioDeviceSetup(previous, false);
+            deviceBackoff = 30;
+        }
+    }
+
 #if JUCE_WINDOWS
     // Inicio automatico con Windows (clave Run del usuario actual; no requiere
     // permisos de administrador).
@@ -1317,6 +1416,11 @@ class StandaloneFilterWindow : public DocumentWindow, private Button::Listener
         }
     };
     SaveTimer saveTimer;
+
+    // tarjetas guardadas que aun no estan disponibles (ver restoreSavedDevices)
+    String pendingInputName, pendingOutputName;
+    int saveTicks = 0;
+    int deviceBackoff = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StandaloneFilterWindow)
 };
